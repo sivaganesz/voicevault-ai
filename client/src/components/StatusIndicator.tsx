@@ -1,7 +1,28 @@
-import React from 'react';
 
-export default function StatusIndicator({ status }) {
-  const getStatusConfig = () => {
+// Define allowed status values
+export type StatusType =
+  | 'connected'
+  | 'connecting'
+  | 'error'
+  | 'processing'
+  | 'disconnected';
+
+// Props interface
+interface StatusIndicatorProps {
+  status: StatusType;
+}
+
+// Config type
+interface StatusConfig {
+  color: string;
+  textColor: string;
+  label: string;
+  glow: string;
+  animate?: boolean;
+}
+
+export default function StatusIndicator({ status }: StatusIndicatorProps): JSX.Element {
+  const getStatusConfig = (): StatusConfig => {
     switch (status) {
       case 'connected':
         return {
@@ -62,7 +83,10 @@ export default function StatusIndicator({ status }) {
           />
         )}
       </div>
-      <span className={`text-[10px] font-bold uppercase tracking-[0.12em] leading-none ${config.textColor}`}>
+
+      <span
+        className={`text-[10px] font-bold uppercase tracking-[0.12em] leading-none ${config.textColor}`}
+      >
         {config.label}
       </span>
     </div>

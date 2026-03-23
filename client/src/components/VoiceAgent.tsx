@@ -1,7 +1,6 @@
-import React, { useState, useCallback, useEffect, useRef } from 'react';
+import { useState, useCallback, useEffect, useRef } from 'react';
 import MicButton from './MicButton';
 import LiveCaptions from './LiveCaptions';
-import StatusIndicator from './StatusIndicator';
 import { useWebSocket } from '../hooks/useWebSocket';
 import { useAudioCapture } from '../hooks/useAudioCapture';
 import { useAudioPlayback } from '../hooks/useAudioPlayback';
@@ -17,7 +16,7 @@ export default function VoiceAgent() {
     const { enqueueAudio, stopPlayback } = useAudioPlayback();
 
     // Handle sending audio chunks to backend
-    const handleAudioChunk = useCallback((base64Audio) => {
+    const handleAudioChunk = useCallback((base64Audio:any) => {
         try {
             send({ type: 'audio', data: base64Audio });
         } catch (e) {
@@ -30,11 +29,11 @@ export default function VoiceAgent() {
     // Register message handlers
     useEffect(() => {
         onMessage('transcript', (data) => {
-            setCaptions((prev) => {
+            setCaptions((prev): any => {
                 if (prev.length === 0) {
                     return [{ id: captionIdRef.current++, role: data.role, text: data.text, timestamp: Date.now() }];
                 }
-                const last = prev[prev.length - 1];
+                const last:any = prev[prev.length - 1];
                 if (last.role === data.role) {
                     // Append text to the current active bubble
                     return [
@@ -82,7 +81,7 @@ export default function VoiceAgent() {
 
     return (
         // <div className="relative w-full h-screen flex flex-col">
-        <div className="relative w-full h-full flex flex-col">
+        <div className="relative w-full h-full item flex flex-col">
 
             {/* Background animated orbs */}
             {/* <div className="fixed inset-0 overflow-hidden pointer-events-none"> */}
@@ -100,10 +99,10 @@ export default function VoiceAgent() {
             </div>
 
 
-      <header className="relative z-10 flex items-center justify-between px-8 py-6">
+            <header className="relative z-10 flex items-center justify-between px-8 py-6">
                 {/* <div className="w-full max-w-7xl flex items-center justify-between"> */}
-                    {/* Logo Section */}
-                    <div className="flex items-center gap-3 group cursor-pointer">
+                {/* Logo Section */}
+                {/* <div className="flex items-center gap-3 group cursor-pointer">
                         <div className="w-10 h-10 rounded-xl bg-gradient-to-tr from-indigo-600 to-purple-500 flex items-center justify-center shadow-lg shadow-indigo-500/20 transition-transform group-hover:scale-105">
                             <svg className="w-5 h-5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 11a7 7 0 01-7 7m0 0a7 7 0 01-7-7m7 7v4m0 0H8m4 0h4m-4-8a3 3 0 01-3-3V5a3 3 0 116 0v6a3 3 0 01-3 3z" />
@@ -115,20 +114,20 @@ export default function VoiceAgent() {
                             </h1>
                             <span className="text-[10px] text-slate-500 font-medium tracking-tight">v1.0.0</span>
                         </div>
-                    </div>
-
-                    {/* Status Indicator Area */}
-                                        <div className={`
+                    </div> */}
+                <div className=""></div>
+                {/* Status Indicator Area */}
+                <div className={`
                             flex items-center gap-2 px-3 py-1.5 rounded-full border backdrop-blur-md transition-all duration-500
                             ${status === 'connected'
-                                                ? 'bg-emerald-500/10 border-emerald-500/20 text-emerald-400'
-                                                : 'bg-slate-500/5 border-white/5 text-slate-400'}
+                        ? 'bg-emerald-500/10 border-emerald-500/20 text-emerald-400'
+                        : 'bg-slate-500/5 border-white/5 text-slate-400'}
                         `}>
-                        <div className={`w-1.5 h-1.5 rounded-full ${status === 'connected' ? 'bg-emerald-400 animate-pulse' : 'bg-slate-500'}`} />
-                        <span className="text-[11px] font-bold uppercase tracking-wider">
-                            {status}
-                        </span>
-                    </div>
+                    <div className={`w-1.5 h-1.5 rounded-full ${status === 'connected' ? 'bg-emerald-400 animate-pulse' : 'bg-slate-500'}`} />
+                    <span className="text-[11px] font-bold uppercase tracking-wider">
+                        {status}
+                    </span>
+                </div>
 
                 {/* </div> */}
             </header>
@@ -137,10 +136,10 @@ export default function VoiceAgent() {
             {/* Main content area */}
             <main className="relative z-10 flex-1 flex flex-col items-center justify-center">
                 {/* Central visual */}
-                <div className="flex flex-col items-center gap-10 -translate-y-20 md:-translate-y-40 transition-transform duration-500">
+                <div className="flex flex-col items-center gap-10 -translate-y-20 md:-translate-y-60 transition-transform duration-500">
                     {/* Visualizer ring (shown when active) */}
                     {isActive && (
-                        <div className="absolute w-48 h-48 rounded-full border border-indigo-500/20">
+                        <div className="absolute w-48 h-48 mt-20 rounded-full border border-indigo-500/20">
                             <div className="absolute inset-0 rounded-full border border-indigo-500/10 animate-ripple" />
                         </div>
                     )}

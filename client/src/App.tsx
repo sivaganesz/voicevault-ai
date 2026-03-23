@@ -2,6 +2,7 @@ import { useState } from 'react';
 import VoiceAgent from './components/VoiceAgent';
 import Documents from './components/Documents';
 import Settings from './components/Settings';
+import logo from './assets/logo.png'
 
 function App() {
   const [activeTab, setActiveTab] = useState('voice');
@@ -17,14 +18,15 @@ function App() {
       <aside className="w-72 bg-white/[0.03] backdrop-blur-xl border-r border-white/10 flex flex-col z-30 shadow-2xl">
         <div className="p-8 mb-4">
           <div className="flex items-center gap-3">
-            <div className="w-12 h-12 rounded-2xl bg-gradient-to-br from-blue-500 via-cyan-500 to-teal-500 flex items-center justify-center shadow-lg shadow-blue-500/30 ring-2 ring-white/20">
+            {/* <div className="w-12 h-12 rounded-2xl bg-gradient-to-br from-blue-500 via-cyan-500 to-teal-500 flex items-center justify-center shadow-lg shadow-blue-500/30 ring-2 ring-white/20">
               <svg className="w-7 h-7 text-white" fill="currentColor" viewBox="0 0 24 24">
                 <path d="M12 14c1.66 0 3-1.34 3-3V5c0-1.66-1.34-3-3-3S9 3.34 9 5v6c0 1.66 1.34 3 3 3z" />
                 <path d="M17 11c0 2.76-2.24 5-5 5s-5-2.24-5-5H5c0 3.53 2.61 6.43 6 6.92V21h2v-3.08c3.39-.49 6-3.39 6-6.92h-2z" />
               </svg>
-            </div>
+            </div> */}
+            <img src={logo} alt="VoiceVault Logo" className="w-12 h-12 rounded-2xl" />
             <div>
-              <h1 className="text-2xl font-black text-white tracking-tight">GROK</h1>
+              <h1 className="text-2xl font-black text-white tracking-tight">VoiceVault</h1>
               <p className="text-[10px] text-blue-400 font-bold tracking-wider uppercase mt-0.5">AI AGENT</p>
             </div>
           </div>
