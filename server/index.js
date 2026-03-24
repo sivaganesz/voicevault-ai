@@ -13,19 +13,14 @@ import crypto from 'crypto';
 import dotenv from 'dotenv';
 import { GoogleGenerativeAI } from '@google/generative-ai';
 import { v2 as cloudinary } from 'cloudinary';
+import mongoose from 'mongoose';
+import Settings from './models/Settings.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 // Load .env from the server directory
 dotenv.config({ path: path.join(__dirname, '.env') });
-
-// Configure Cloudinary
-cloudinary.config({
-  cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
-  api_key: process.env.CLOUDINARY_API_KEY,
-  api_secret: process.env.CLOUDINARY_API_SECRET,
-});
 
 const require = createRequire(import.meta.url);
 const pdfLib = require('pdf-parse');
@@ -37,54 +32,104 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
-// Initialize Qdrant Client
-const qdrantClient = new QdrantClient({ 
-  url: process.env.QDRANT_URL || 'http://localhost:6333',
-  apiKey: process.env.QDRANT_API_KEY
-});
-const COLLECTION_NAME = 'documents';
-
-// Initialize Gemini
-const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
-if (!GEMINI_API_KEY) {
-  console.error('❌ GEMINI_API_KEY is required. Copy server/.env.example to server/.env and set your key.');
-  process.exit(1);
-}
-
-const ai = new GoogleGenAI({ 
-  apiKey: GEMINI_API_KEY,
-  httpOptions: { apiVersion: 'v1alpha' }
-});
+let qdrantClient = null;
+let ai = null;
+let embeddingModel = null;
+let globalSettings = null;
+let COLLECTION_NAME = 'documents';
 const MODEL = 'gemini-2.5-flash-native-audio-latest';
 
-// Embedding Model for Vector DB
-const genAI = new GoogleGenerativeAI(GEMINI_API_KEY);
-const embeddingModel = genAI.getGenerativeModel({ model: "gemini-embedding-001" });
-
-// Ensure Qdrant collection exists
-async function initQdrant() {
+async function loadAndApplySettings() {
   try {
-    const collections = await qdrantClient.getCollections();
-    const exists = collections.collections.some(c => c.name === COLLECTION_NAME);
-    if (!exists) {
-      console.log(`🚀 Creating Qdrant collection: ${COLLECTION_NAME}`);
-      await qdrantClient.createCollection(COLLECTION_NAME, {
-        vectors: {
-          size: 768, // size for gemini-embedding-001 with outputDimensionality
-          distance: 'Cosine',
-        },
-      });
-    } else {
-      console.log(`✅ Qdrant collection '${COLLECTION_NAME}' already exists.`);
+    const mongodbUri = process.env.MONGODB_URI;
+    if (!mongodbUri) {
+      console.warn('⚠️ MONGODB_URI not found. Please set it in .env');
+      return;
     }
-  } catch (error) {
-    console.error('❌ Error initializing Qdrant:', error);
+    await mongoose.connect(mongodbUri);
+    console.log('✅ Connected to MongoDB');
+
+    let config = await Settings.findOne();
+    if (!config) {
+      config = await Settings.create({
+        qdrant: {
+          endpoint: process.env.QDRANT_URL || 'http://localhost:6333',
+          apiKey: process.env.QDRANT_API_KEY || '',
+          collection: 'documents',
+          vectorSize: 768
+        },
+        cloudinary: {
+          cloudName: process.env.CLOUDINARY_CLOUD_NAME || '',
+          apiKey: process.env.CLOUDINARY_API_KEY || '',
+          apiSecret: process.env.CLOUDINARY_API_SECRET || ''
+        },
+        gemini: {
+          apiKey: process.env.GEMINI_API_KEY || '',
+          model: 'gemini-2.5-flash-native-audio-latest',
+          temperature: 0.1
+        }
+      });
+      console.log('✅ Created default settings from .env');
+    }
+    await applyConfig(config);
+  } catch (err) {
+    console.error('❌ Failed to load settings:', err);
   }
 }
-initQdrant();
+
+async function applyConfig(config) {
+  globalSettings = config;
+  COLLECTION_NAME = config.qdrant.collection || 'documents';
+
+  if (config.cloudinary.cloudName && config.cloudinary.apiKey && config.cloudinary.apiSecret) {
+    cloudinary.config({
+      cloud_name: config.cloudinary.cloudName,
+      api_key: config.cloudinary.apiKey,
+      api_secret: config.cloudinary.apiSecret,
+    });
+    console.log('✅ Cloudinary configured');
+  }
+
+  if (config.qdrant.endpoint) {
+    qdrantClient = new QdrantClient({
+      url: config.qdrant.endpoint,
+      apiKey: config.qdrant.apiKey || undefined
+    });
+    try {
+      const collections = await qdrantClient.getCollections();
+      const exists = collections.collections.some(c => c.name === COLLECTION_NAME);
+      if (!exists) {
+        console.log(`🚀 Creating Qdrant collection: ${COLLECTION_NAME}`);
+        await qdrantClient.createCollection(COLLECTION_NAME, {
+          vectors: { size: config.qdrant.vectorSize || 768, distance: 'Cosine' },
+        });
+      } else {
+        console.log(`✅ Qdrant collection '${COLLECTION_NAME}' already exists.`);
+      }
+    } catch (err) {
+      console.error('❌ Error initializing Qdrant:', err.message);
+    }
+  }
+
+  if (config.gemini.apiKey) {
+    ai = new GoogleGenAI({ 
+      apiKey: config.gemini.apiKey,
+      httpOptions: { apiVersion: 'v1alpha' }
+    });
+    
+    const genAI = new GoogleGenerativeAI(config.gemini.apiKey);
+    embeddingModel = genAI.getGenerativeModel({ model: "gemini-embedding-001" });
+    console.log('✅ Gemini AI configured');
+  }
+}
+
+loadAndApplySettings();
 
 // Helper to create embeddings
 async function createEmbedding(text) {
+  if (!embeddingModel) {
+    throw new Error('Embedding model not initialized. Check your Gemini API key in Settings.');
+  }
   try {
     const start = Date.now();
     const result = await embeddingModel.embedContent({
@@ -124,6 +169,33 @@ const upload = multer({
 
 const uploadJobs = new Map();
 
+// --- API Endpoints for Settings ---
+app.get('/api/settings', async (req, res) => {
+  try {
+    const config = await Settings.findOne();
+    res.json(config || {});
+  } catch (error) {
+    res.status(500).json({ error: 'Failed to fetch settings' });
+  }
+});
+
+app.post('/api/settings', async (req, res) => {
+  try {
+    let config = await Settings.findOne();
+    if (!config) {
+      config = new Settings(req.body);
+    } else {
+      Object.assign(config, req.body);
+    }
+    await config.save();
+    await applyConfig(config);
+    res.json({ success: true, message: 'Settings saved and applied successfully' });
+  } catch (error) {
+    console.error('❌ Error saving settings:', error);
+    res.status(500).json({ error: 'Failed to save settings' });
+  }
+});
+
 // Progress Tracking Endpoint (Polling)
 app.get('/api/upload-status/:jobId', (req, res) => {
   const { jobId } = req.params;
@@ -132,12 +204,10 @@ app.get('/api/upload-status/:jobId', (req, res) => {
     const job = uploadJobs.get(jobId);
     res.json(job);
     
-    // If completed or error, the client will stop polling, 
-    // so we can schedule a cleanup of the job data
     if (job.progress === 100 || job.status === 'error') {
       setTimeout(() => {
         uploadJobs.delete(jobId);
-      }, 10000); // Keep for 10 seconds to allow for late pollers
+      }, 10000);
     }
   } else {
     res.status(404).json({ error: 'Job not found' });
@@ -200,9 +270,7 @@ app.post('/api/upload', upload.single('file'), async (req, res) => {
     const category = req.body.category || 'general';
 
     updateProgress('Uploading to Cloudinary', 10);
-    console.log(`☁️ Uploading to Cloudinary: ${req.file.originalname}`);
     
-    // 1. Upload to Cloudinary
     let cloudinaryResult;
     try {
       cloudinaryResult = await cloudinary.uploader.upload(filePath, {
@@ -210,7 +278,6 @@ app.post('/api/upload', upload.single('file'), async (req, res) => {
         folder: 'voice-vault-documents',
         public_id: `${Date.now()}-${req.file.originalname.replace(/\.[^/.]+$/, "")}`
       });
-      console.log(`✅ Cloudinary Upload Success: ${cloudinaryResult.secure_url}`);
     } catch (err) {
       console.error('❌ Cloudinary Upload Failed:', err);
       updateProgress('Cloudinary error', 0);
@@ -218,12 +285,9 @@ app.post('/api/upload', upload.single('file'), async (req, res) => {
     }
 
     updateProgress('Parsing file content', 30);
-    // 2. Parse local file
-    console.log(`📄 Processing file content: ${req.file.originalname} (${req.file.mimetype}) in category: ${category}`);
     let parsedText;
     try {
       parsedText = await parseFile(filePath, req.file.mimetype, extension);
-      console.log(`✅ File parsed successfully. Length: ${parsedText.length} characters.`);
     } catch (err) {
       console.error('❌ Parsing Failed:', err);
       updateProgress('Parsing error', 0);
@@ -236,13 +300,9 @@ app.post('/api/upload', upload.single('file'), async (req, res) => {
     }
 
     updateProgress('Generating embeddings', 60);
-    // 3. Chunking
     const chunks = parsedText.split(/\n\s*\n/).filter(c => c.trim().length > 50);
     const finalChunks = chunks.length > 0 ? chunks : [parsedText.substring(0, 2000)];
 
-    console.log(`🧩 Splitting into ${finalChunks.length} chunks for embedding...`);
-
-    // 4. Embedding & Qdrant
     const points = [];
     for (let i = 0; i < finalChunks.length; i++) {
       const chunk = finalChunks[i];
@@ -274,17 +334,14 @@ app.post('/api/upload', upload.single('file'), async (req, res) => {
         wait: true,
         points: points
       });
-      console.log(`✨ Successfully stored ${points.length} vectors in Qdrant`);
     } catch (err) {
       console.error('❌ Qdrant Upsert Failed:', err);
       updateProgress('Database error', 0);
       throw new Error(`Qdrant database error: ${err.message}`);
     }
 
-    // 5. Clean up local file
     if (fs.existsSync(filePath)) {
       fs.unlinkSync(filePath);
-      console.log(`🗑️ Local file deleted: ${filePath}`);
     }
 
     updateProgress('Completed', 100);
@@ -301,19 +358,12 @@ app.post('/api/upload', upload.single('file'), async (req, res) => {
     console.error('❌ ERROR IN UPLOAD WORKFLOW:', error.message);
     if (jobId) uploadJobs.set(jobId, { status: 'error', progress: 0, error: error.message });
     
-    // Clean up local file on failure
     if (filePath && fs.existsSync(filePath)) {
-      try {
-        fs.unlinkSync(filePath);
-        console.log(`🗑️ Cleaned up temporary file: ${filePath}`);
-      } catch (unlinkErr) {
-        console.error('⚠️ Could not delete temporary file:', unlinkErr.message);
-      }
+      try { fs.unlinkSync(filePath); } catch (e) {}
     }
     
     res.status(500).json({ 
-      error: error.message || 'An unexpected error occurred during processing',
-      step: error.message.split(':')[0] // Simple hint about where it failed
+      error: error.message || 'An unexpected error occurred during processing'
     });
   }
 });
@@ -321,52 +371,36 @@ app.post('/api/upload', upload.single('file'), async (req, res) => {
 // Documents Endpoint
 app.get('/api/documents', async (req, res) => {
   try {
-    console.log('📂 Fetching documents from Cloudinary (Merging raw and image types)...');
-    
-    // Fetch raw files (TXT, DOCX, etc.)
     const rawResources = await cloudinary.api.resources({
-      type: 'upload',
-      prefix: 'voice-vault-documents/',
-      resource_type: 'raw',
-      max_results: 50
+      type: 'upload', prefix: 'voice-vault-documents/', resource_type: 'raw', max_results: 50
     });
-
-    // Fetch image files (Cloudinary often treats PDFs as images)
     const imageResources = await cloudinary.api.resources({
-      type: 'upload',
-      prefix: 'voice-vault-documents/',
-      resource_type: 'image',
-      max_results: 50
+      type: 'upload', prefix: 'voice-vault-documents/', resource_type: 'image', max_results: 50
     });
 
     const combinedResources = [...rawResources.resources, ...imageResources.resources];
-
     const documents = combinedResources.map(file => {
       const name = file.public_id.replace('voice-vault-documents/', '');
       return {
-        name: name,
-        size: file.bytes,
-        date: file.created_at,
+        name: name, size: file.bytes, date: file.created_at,
         type: path.extname(name) || (file.format ? `.${file.format}` : '.unknown'),
         url: file.secure_url
       };
     });
-
-    // Sort by date descending
     documents.sort((a, b) => new Date(b.date) - new Date(a.date));
-
     res.json(documents);
   } catch (error) {
-    console.error('Error fetching documents from Cloudinary:', error);
-    res.status(500).json({ error: 'Failed to fetch documents from Cloudinary' });
+    res.status(500).json({ error: 'Failed to fetch documents' });
   }
 });
 
 app.get('/health', async (req, res) => {
   let qdrantStatus = false;
   try {
-    await qdrantClient.getCollections();
-    qdrantStatus = true;
+    if (qdrantClient) {
+      await qdrantClient.getCollections();
+      qdrantStatus = true;
+    }
   } catch (e) {
     qdrantStatus = false;
   }
@@ -378,39 +412,35 @@ app.get('/health', async (req, res) => {
 });
 
 // Helper to query Qdrant
-async function queryDocuments(query, category = null) {
+async function queryDocuments(query, category = null, clientWs = null) {
   try {
-    console.log(`[queryDocuments] Starting search for: "${query}"`);
-    const start = Date.now();
-    
-    console.log(`[queryDocuments] Generating embedding for query...`);
+    if (!qdrantClient) throw new Error('Qdrant not initialized');
     const queryEmbedding = await createEmbedding(query);
     
     const searchParams = {
-      vector: queryEmbedding,
-      limit: 3,
-      with_payload: true,
+      vector: queryEmbedding, limit: 3, with_payload: true,
     };
 
     if (category && category !== 'general' && category !== 'All') {
-      console.log(`[queryDocuments] Applying category filter: ${category}`);
       searchParams.filter = {
         must: [{ key: 'category', match: { value: category } }],
       };
     }
 
-    console.log(`[queryDocuments] Executing Qdrant search...`);
+    console.log(`\n🔍 Gemini analyze vector DB for: "${query}"`);
     const results = await qdrantClient.search(COLLECTION_NAME, searchParams);
-    console.log(`⏱️ Qdrant search took ${Date.now() - start}ms. Found ${results.length} results.`);
     
-    if (results.length === 0) {
-      console.log(`[queryDocuments] No results found.`);
-      return "No relevant information found in the knowledge base.";
-    }
-    
-    const context = results.map(r => `[From ${r.payload.filename}]: ${r.payload.text}`).join('\n---\n');
-    console.log(`[queryDocuments] Found relevant info (length: ${context.length}).`);
-    return context;
+    // Analyze and log Vector DB results
+    const kCount = results.length;
+    console.log(`📚 top ${kCount} chunk(s) retrieved`);
+    results.forEach((r, i) => {
+      console.log(`   [${i+1}] File: ${r.payload.filename} | Chars: ${r.payload.text?.length}`);
+    });
+
+    if (clientWs) clientWs.isQdrantResponse = true;
+
+    if (results.length === 0) return "No relevant information found.";
+    return results.map(r => `[From ${r.payload.filename}]: ${r.payload.text}`).join('\n---\n');
   } catch (error) {
     console.error('❌ Qdrant search error:', error);
     return "Error searching knowledge base: " + error.message;
@@ -423,6 +453,7 @@ wss.on('connection', async (clientWs) => {
   let geminiSession = null;
   let isSessionActive = false;
   let selectedCategory = 'general';
+  clientWs.isQdrantResponse = false;
 
   const sendToClient = (message) => {
     if (clientWs.readyState === WebSocket.OPEN) {
@@ -432,33 +463,30 @@ wss.on('connection', async (clientWs) => {
 
   const startGeminiSession = async () => {
     try {
+      if (!ai) {
+        sendToClient({ type: 'status', status: 'error', message: 'Gemini AI is not configured. Please add your API key in Settings.' });
+        return;
+      }
       sendToClient({ type: 'status', status: 'connecting' });
 
       geminiSession = await ai.live.connect({
         model: MODEL,
         config: {
           responseModalities: ["AUDIO"],
-          temperature: 0.1,
+          temperature: globalSettings?.gemini?.temperature || 0.1,
           speechConfig: {
-            voiceConfig: {
-              prebuiltVoiceConfig: {
-                voiceName: 'Aoede',
-              },
-            },
+            voiceConfig: { prebuiltVoiceConfig: { voiceName: 'Aoede' } },
           },
           tools: [
             {
               functionDeclarations: [
                 {
                   name: 'query_knowledge_base',
-                  description: 'Search the uploaded documents (PDFs, text files) for information to help answer the user question. Use this whenever the user asks about specific topics covered in their documents.',
+                  description: 'Search uploaded documents for information.',
                   parameters: {
                     type: 'OBJECT',
                     properties: {
-                      query: {
-                        type: 'STRING',
-                        description: 'The search query or topic to look up in the knowledge base.'
-                      }
+                      query: { type: 'STRING', description: 'Search query' }
                     },
                     required: ['query']
                   }
@@ -470,76 +498,59 @@ wss.on('connection', async (clientWs) => {
           outputAudioTranscription: { enabled: true },
           systemInstruction: {
             parts: [{
-              text: 'You are a helpful voice assistant. You have access to a knowledge base of uploaded documents. When you need specific information, use the query_knowledge_base tool. Keep responses extremely concise (1-2 sentences max) and conversational.'
+              text: `You are an expert AI Voice Assistant with access to a knowledge base (Qdrant).
+              
+              RULES:
+              1. If the user's question can be answered from your general knowledge (like "Who are you?", "What is SIP?"), answer IMMEDIATELY and concisely.
+              2. If the user asks about SPECIFIC information likely in their uploaded documents (like "What is MCAAP?", "Check my policy"), use the 'query_knowledge_base' tool.
+              3. When you receive results from the tool, synthesize a natural, 1-2 sentence response.
+              4. Always be extremely concise (max 2 sentences).
+              5. Use a friendly, professional voice.`
             }]
           }
         },
         callbacks: {
           onopen: () => {
-            console.log('✅ Gemini Live session opened');
             isSessionActive = true;
             sendToClient({ type: 'status', status: 'connected' });
           },
-          onmessage: async (message) => {
-            await handleGeminiMessage(message);
-          },
+          onmessage: async (message) => { await handleGeminiMessage(message); },
           onerror: (error) => {
-            console.error('❌ Gemini error:', error);
-            sendToClient({ type: 'status', status: 'error', message: error.message || 'Gemini session error' });
+            sendToClient({ type: 'status', status: 'error', message: error.message || 'Gemini error' });
           },
-          onclose: (event) => {
-            console.log('🔒 Gemini session closed', event ? `(Code: ${event.code}, Reason: ${event.reason})` : '');
+          onclose: () => {
             isSessionActive = false;
             sendToClient({ type: 'status', status: 'disconnected' });
           },
         },
       });
     } catch (error) {
-      console.error('❌ Failed to connect to Gemini:', error);
-      sendToClient({ type: 'status', status: 'error', message: error.message || 'Failed to connect to Gemini' });
+      sendToClient({ type: 'status', status: 'error', message: error.message });
     }
   };
 
   const handleGeminiMessage = async (message) => {
     if (message.toolCall) {
       const toolCall = message.toolCall;
+      const functionResponses = [];
+      
       for (const fc of toolCall.functionCalls) {
         if (fc.name === 'query_knowledge_base') {
           const { query } = fc.args;
-          const callId = fc.id;
-          console.log(`🔍 Tool Call: query_knowledge_base("${query}")`);
+          const result = await queryDocuments(query, selectedCategory, clientWs);
+          const optimizedResult = result.length > 1000 ? result.substring(0, 1000) + "..." : result;
           
-          try {
-            const result = await queryDocuments(query, selectedCategory);
-            
-            // Limit to 1000 characters for voice API speed
-            const optimizedResult = result.length > 1000 ? 
-              result.substring(0, 1000) + "... [truncated]" : result;
-
-            console.log(`📤 Sending optimized result (${optimizedResult.length} chars)`);
-            
-            geminiSession.sendRealtimeInput({
-              toolResponse: {
-                functionResponses: [{
-                  name: 'query_knowledge_base',
-                  id: callId,
-                  response: { result: optimizedResult }
-                }]
-              }
-            });
-          } catch (err) {
-            console.error(`❌ Tool execution failed:`, err.message);
-            geminiSession.sendRealtimeInput({
-              toolResponse: {
-                functionResponses: [{
-                  name: 'query_knowledge_base',
-                  id: callId,
-                  response: { result: "Error: " + err.message }
-                }]
-              }
-            });
-          }
+          functionResponses.push({
+            name: 'query_knowledge_base',
+            id: fc.id,
+            response: { result: optimizedResult }
+          });
         }
+      }
+
+      if (functionResponses.length > 0) {
+        console.log(`📤 Sending tool response back to Gemini (${functionResponses.length} calls)`);
+        geminiSession.sendToolResponse({ functionResponses });
       }
       return;
     }
@@ -547,30 +558,37 @@ wss.on('connection', async (clientWs) => {
     if (message.serverContent) {
       const content = message.serverContent;
       if (content.modelTurn && content.modelTurn.parts) {
-        content.modelTurn.parts.forEach((part, i) => {
+        content.modelTurn.parts.forEach((part) => {
           if (part.thought === true) {
-            console.log(`💭 AI Thought: ${part.text?.substring(0, 100)}...`);
-            return; 
+            console.log(`💭 AI Thought: ${part.text?.substring(0, 50)}...`);
+            return;
           }
           if (part.text) {
             sendToClient({ type: 'transcript', role: 'ai', text: part.text });
           }
-          if (part.inlineData) {
-            sendToClient({ type: 'audio', data: part.inlineData.data });
-          }
+          if (part.inlineData) sendToClient({ type: 'audio', data: part.inlineData.data });
         });
       }
 
-      const transcript = content.inputTranscription?.text || content.inputTranscript?.text || (typeof content.inputTranscript === 'string' ? content.inputTranscript : null);
+      const transcript = content.inputTranscription?.text || content.inputTranscript?.text;
       if (transcript) {
-        console.log(`👤 User: ${transcript}`); // LOG USER QUESTION
+        console.log(`👤 User: ${transcript}`);
         sendToClient({ type: 'transcript', role: 'user', text: transcript });
       }
-
-      const aiTranscript = content.outputTranscription?.text || content.outputTranscript?.text || (typeof content.outputTranscript === 'string' ? content.outputTranscript : null);
+      
+      const aiTranscript = content.outputTranscription?.text || content.outputTranscript?.text;
       if (aiTranscript) {
-        console.log(`🤖 AI: ${aiTranscript}`); // LOG AI RESPONSE
+        if (clientWs.isQdrantResponse) {
+          console.log(`🤖 Gemini-Qdrant-response: ${aiTranscript}`);
+          // We don't reset immediately because one turn might have multiple content messages
+        } else {
+          console.log(`🤖 Gemini-general-response: ${aiTranscript}`);
+        }
         sendToClient({ type: 'transcript', role: 'ai', text: aiTranscript });
+      }
+
+      if (content.turnComplete) {
+        clientWs.isQdrantResponse = false;
       }
     }
   };
@@ -580,21 +598,14 @@ wss.on('connection', async (clientWs) => {
   clientWs.on('message', async (data) => {
     try {
       const message = JSON.parse(data.toString());
-      if (message.type === 'audio') {
-        if (isSessionActive && geminiSession) {
-          geminiSession.sendRealtimeInput({ audio: { mimeType: 'audio/pcm;rate=16000', data: message.data } });
-        }
+      if (message.type === 'audio' && isSessionActive && geminiSession) {
+        geminiSession.sendRealtimeInput({ audio: { mimeType: 'audio/pcm;rate=16000', data: message.data } });
       } else if (message.type === 'category_select') {
         selectedCategory = message.category;
-        console.log(`📂 Client selected category: ${selectedCategory}`);
-      } else if (message.type === 'end_turn') {
-        if (isSessionActive && geminiSession) {
-          geminiSession.sendRealtimeInput({ audioStreamEnd: true });
-        }
+      } else if (message.type === 'end_turn' && isSessionActive && geminiSession) {
+        geminiSession.sendRealtimeInput({ audioStreamEnd: true });
       }
-    } catch (error) {
-      console.error('❌ Error processing client message:', error);
-    }
+    } catch (error) {}
   });
 
   clientWs.on('close', () => {
@@ -603,13 +614,8 @@ wss.on('connection', async (clientWs) => {
   });
 });
 
-// Error Handling Middleware (must be after all routes)
 app.use((err, req, res, next) => {
-  console.error('Final Error Catch:', err.message);
-  res.status(err.status || 500).json({
-    error: err.message || 'Internal Server Error',
-    type: err.name || 'Error'
-  });
+  res.status(err.status || 500).json({ error: err.message });
 });
 
 server.listen(PORT, () => {
