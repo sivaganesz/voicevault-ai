@@ -31,6 +31,17 @@ export default function Documents(): JSX.Element {
   const [processedCount, setProcessedCount] = useState<number>(0);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [isDragging, setIsDragging] = useState(false);
+  const [selectedCategory, setSelectedCategory] = useState<string>('general');
+
+  const categories = [
+    'general',
+    'Technical Support',
+    'Product Manual',
+    'HR Policy',
+    'Sales Pitch',
+    'Legal',
+    'Other'
+  ];
 
   const [sourcesType, setSourcesType] = useState<SourceType>({
     PDF: 0,
@@ -116,6 +127,7 @@ export default function Documents(): JSX.Element {
 
     const formData = new FormData();
     formData.append('file', file);
+    formData.append('category', selectedCategory);
 
     try {
       const response = await fetch('http://localhost:3001/api/upload', {
@@ -126,7 +138,7 @@ export default function Documents(): JSX.Element {
       const data = await response.json();
 
       if (response.ok) {
-        setUploadStatus({ message: `Successfully uploaded and parsed ${file.name}`, isError: false });
+        setUploadStatus({ message: `Successfully uploaded and indexed ${file.name} in [${selectedCategory}]`, isError: false });
 
         // Update the list with a new document
         const newDoc: DocumentItem = {
@@ -201,6 +213,9 @@ export default function Documents(): JSX.Element {
           </div>
         </div>
       )}
+      <div className="mb-6">
+        <label className="text-xs font-bold text-slate-500 uppercase tracking-widest">Select Category</label>
+      </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
         {/* LEFT */}
@@ -210,59 +225,85 @@ export default function Documents(): JSX.Element {
           <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
 
             {/* Local Files */}
-            <div
-              onClick={() => fileInputRef.current?.click()}
-              onDragOver={handleDragOver}
-              onDragLeave={handleDragLeave}
-              onDrop={handleDrop}
-              className={`group rounded-2xl p-8 border transition-all duration-300 cursor-pointer
-                ${isDragging
-                  ? 'bg-blue-500/10 border-blue-400 scale-[1.02]'
-                  : 'bg-white/5 border-white/10 hover:border-blue-500/50'}
-              `}
-            >
-              <input
-                type="file"
-                ref={fileInputRef}
-                onChange={handleFileSelect}
-                className="hidden"
-                accept=".pdf,.doc,.docx,.txt"
-              />
-              <h3 className="text-xl font-bold text-white mb-2">
-                {isDragging ? 'Drop your file here 👇' : 'Local Files'}
-              </h3>
-              <p className="text-sm text-slate-400 mb-6">
-                Drag & drop or click to upload PDF, TXT, DOC files.
-              </p>
-              <div className="inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-blue-500/10 text-blue-400 text-xs font-bold uppercase tracking-wider group-hover:bg-blue-500/20 transition-colors">
-                {isUploading ? 'Uploading...' : 'Browse Files'}
-                <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
-                </svg>
+            <div className="flex flex-col gap-4">
+              <div className="flex flex-col gap-2">
+                <div className="relative">
+                  <select
+                    value={selectedCategory}
+                    onChange={(e) => setSelectedCategory(e.target.value)}
+                    className="appearance-none bg-white/5 border border-white/10 rounded-xl px-4 pr-10 py-2 text-sm text-white w-full focus:outline-none focus:border-blue-500/50"
+                  >
+                    {categories.map(category => (
+                      <option key={category} value={category} className="bg-slate-900">
+                        {category}
+                      </option>
+                    ))}
+                  </select>
+
+                  {/* Custom arrow */}
+                  <div className="pointer-events-none absolute inset-y-0 right-3 flex items-center text-white/60 text-xs">
+                    ▼
+                  </div>
+                </div>
+              </div>
+              <div
+                onClick={() => fileInputRef.current?.click()}
+                onDragOver={handleDragOver}
+                onDragLeave={handleDragLeave}
+                onDrop={handleDrop}
+                className={`group rounded-2xl p-8 border transition-all duration-300 cursor-pointer flex-1
+                  ${isDragging
+                    ? 'bg-blue-500/10 border-blue-400 scale-[1.02]'
+                    : 'bg-white/5 border-white/10 hover:border-blue-500/50'}
+                `}
+              >
+                <input
+                  type="file"
+                  ref={fileInputRef}
+                  onChange={handleFileSelect}
+                  className="hidden"
+                  accept=".pdf,.doc,.docx,.txt"
+                />
+                <h3 className="text-xl font-bold text-white mb-2">
+                  {isDragging ? 'Drop your file here 👇' : 'Local Files'}
+                </h3>
+                <p className="text-sm text-slate-400 mb-6">
+                  Drag & drop or click to upload PDF, TXT, DOC files.
+                </p>
+                <div className="inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-blue-500/10 text-blue-400 text-xs font-bold uppercase tracking-wider group-hover:bg-blue-500/20 transition-colors">
+                  {isUploading ? 'Uploading...' : 'Browse Files'}
+                  <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
+                  </svg>
+                </div>
               </div>
             </div>
-
             {/* Web Scraper */}
-            <div className="bg-white/5 backdrop-blur-sm rounded-2xl p-8 border border-white/10">
+            <div className="relative bg-white/5 backdrop-blur-sm rounded-2xl p-8 border border-white/10 opacity-60">
+
+              {/* Overlay */}
+              <div className="absolute inset-0 flex items-center justify-center bg-black/40 rounded-2xl">
+                <span className="text-white text-sm font-semibold tracking-wide">
+                  🚧 Coming Soon
+                </span>
+              </div>
+
               <h3 className="text-xl font-bold text-white mb-3">Web Scraper</h3>
 
-              <div className="space-y-4">
+              <div className="space-y-4 pointer-events-none">
                 <input
                   type="text"
                   value={url}
-                  onChange={(e: React.ChangeEvent<HTMLInputElement>) =>
-                    setUrl(e.target.value)
-                  }
                   placeholder="https://example.com/docs"
                   className="w-full bg-black/30 border border-white/10 rounded-xl px-4 py-3 text-sm text-white"
+                  disabled
                 />
 
                 <button
-                  onClick={handleFirecrawl}
-                  disabled={isProcessing || !url}
-                  className="w-full py-3 bg-gradient-to-r from-blue-600 to-cyan-600 rounded-xl text-white text-sm font-bold disabled:opacity-50"
+                  className="w-full py-3 bg-gradient-to-r from-blue-600 to-cyan-600 rounded-xl text-white text-sm font-bold opacity-50 cursor-not-allowed"
+                  disabled
                 >
-                  {isProcessing ? 'Processing...' : 'Run FireCrawl'}
+                  Run FireCrawl
                 </button>
               </div>
             </div>
@@ -328,7 +369,7 @@ export default function Documents(): JSX.Element {
   );
 }
 
-// Separate typed component
+
 function SourceItem({ label, count, active = false }: SourceItemProps): JSX.Element {
   return (
     <div className="flex items-center justify-between py-2">
