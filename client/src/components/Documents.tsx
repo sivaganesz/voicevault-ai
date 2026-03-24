@@ -23,6 +23,13 @@ interface SourceType {
   Websites: number;
 }
 
+interface UploadJob {
+  status: string;
+  progress: number;
+  filename?: string;
+  error?: string;
+}
+
 export default function Documents(): JSX.Element {
   const [url, setUrl] = useState<string>('');
   const [isProcessing, setIsProcessing] = useState<boolean>(false);
@@ -32,6 +39,7 @@ export default function Documents(): JSX.Element {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [isDragging, setIsDragging] = useState(false);
   const [selectedCategory, setSelectedCategory] = useState<string>('general');
+  const [activeJob, setActiveJob] = useState<UploadJob | null>(null);
 
   const categories = [
     'general',
@@ -60,7 +68,6 @@ export default function Documents(): JSX.Element {
     try {
       const response = await fetch('http://localhost:3001/api/documents');
       const data: DocumentItem[] = await response.json();
-      console.log("data", data);
       setDocuments(data);
       setProcessedCount(data.length);
 
@@ -73,7 +80,8 @@ export default function Documents(): JSX.Element {
       };
 
       data.forEach((doc) => {
-        const ext = doc.name.split('.').pop()?.toLowerCase();
+        // Use doc.type first (e.g., '.pdf'), fall back to name if needed
+        const ext = (doc.type || doc.name.split('.').pop() || '').toLowerCase().replace('.', '');
 
         if (ext === 'pdf') counts.PDF++;
         else if (ext === 'txt') counts.TXT++;
@@ -85,16 +93,6 @@ export default function Documents(): JSX.Element {
     } catch (error) {
       console.error('Error fetching documents:', error);
     }
-  };
-
-  console.log("sourcesType", sourcesType)
-  const handleFirecrawl = (): void => {
-    if (!url) return;
-    setIsProcessing(true);
-    setTimeout(() => {
-      setIsProcessing(false);
-      setUrl('');
-    }, 3000);
   };
 
   const formatSize = (bytes: number) => {
@@ -124,10 +122,32 @@ export default function Documents(): JSX.Element {
   const uploadFile = async (file: File) => {
     setIsUploading(true);
     setUploadStatus(null);
+    const jobId = Math.random().toString(36).substring(7);
+
+    // Start polling for progress
+    const pollInterval = setInterval(async () => {
+      try {
+        const res = await fetch(`http://localhost:3001/api/upload-status/${jobId}`);
+        if (res.ok) {
+          const jobData = await res.json();
+          setActiveJob(jobData);
+          
+          if (jobData.progress === 100 || jobData.status === 'error') {
+            clearInterval(pollInterval);
+            setTimeout(() => {
+              if (jobData.progress === 100) setActiveJob(null);
+            }, 3000);
+          }
+        }
+      } catch (err) {
+        console.error('Polling error:', err);
+      }
+    }, 500);
 
     const formData = new FormData();
     formData.append('file', file);
     formData.append('category', selectedCategory);
+    formData.append('jobId', jobId);
 
     try {
       const response = await fetch('http://localhost:3001/api/upload', {
@@ -140,21 +160,16 @@ export default function Documents(): JSX.Element {
       if (response.ok) {
         setUploadStatus({ message: `Successfully uploaded and indexed ${file.name} in [${selectedCategory}]`, isError: false });
 
-        // Update the list with a new document
-        const newDoc: DocumentItem = {
-          name: file.name,
-          type: file.name.split('.').pop()?.toUpperCase() || 'UNKNOWN',
-          size: formatSize(file.size),
-          date: new Date().toISOString().split('T')[0],
-        };
-
-        setDocuments(prev => [newDoc, ...prev]);
-        setProcessedCount(prev => prev + 1);
+        // Refresh all data from server to ensure counts and list are in sync
+        await fetchDocuments();
       } else {
         setUploadStatus({ message: data.error || 'Upload failed', isError: true });
+        setActiveJob(prev => prev ? { ...prev, status: 'error', error: data.error } : null);
+        clearInterval(pollInterval);
       }
     } catch (error) {
       setUploadStatus({ message: 'Error connecting to server', isError: true });
+      clearInterval(pollInterval);
     } finally {
       setIsUploading(false);
       if (fileInputRef.current) fileInputRef.current.value = '';
@@ -205,7 +220,7 @@ export default function Documents(): JSX.Element {
         </p>
       </div>
 
-      {uploadStatus && (
+      {uploadStatus && !activeJob && (
         <div className={`mb-6 p-4 rounded-xl border ${uploadStatus.isError ? 'bg-red-500/10 border-red-500/20 text-red-400' : 'bg-emerald-500/10 border-emerald-500/20 text-emerald-400'}`}>
           <div className="flex items-center gap-2">
             <span className="text-sm font-medium">{uploadStatus.message}</span>
@@ -213,11 +228,45 @@ export default function Documents(): JSX.Element {
           </div>
         </div>
       )}
+
+      {activeJob && (
+        <div className={`mb-6 p-5 rounded-2xl border backdrop-blur-md transition-all duration-500 ${activeJob.status === 'error' ? 'bg-rose-500/10 border-rose-500/20' : 'bg-blue-500/10 border-blue-500/20'}`}>
+          <div className="flex items-center justify-between mb-3">
+            <div className="flex items-center gap-3">
+              <div className={`p-2 rounded-lg ${activeJob.status === 'error' ? 'bg-rose-500/20' : 'bg-blue-500/20'}`}>
+                {activeJob.status === 'error' ? <File className="w-5 h-5 text-rose-400" /> : <FileText className="w-5 h-5 text-blue-400 animate-pulse" />}
+              </div>
+              <div>
+                <p className="text-sm font-bold text-white">{activeJob.filename || 'Processing file...'}</p>
+                <p className={`text-[11px] font-medium uppercase tracking-wider ${activeJob.status === 'error' ? 'text-rose-400' : 'text-blue-400'}`}>
+                  {activeJob.status}
+                </p>
+              </div>
+            </div>
+            <span className="text-lg font-black text-white">{activeJob.progress}%</span>
+          </div>
+
+          <div className="w-full h-2 bg-white/5 rounded-full overflow-hidden">
+            <div 
+              className={`h-full transition-all duration-500 ease-out rounded-full ${activeJob.status === 'error' ? 'bg-rose-500' : 'bg-gradient-to-r from-blue-500 to-cyan-400 shadow-[0_0_15px_rgba(59,130,246,0.5)]'}`}
+              style={{ width: `${activeJob.progress}%` }}
+            />
+          </div>
+
+          {activeJob.error && (
+            <p className="mt-3 text-xs text-rose-400 font-medium">
+              Error: {activeJob.error}
+            </p>
+          )}
+        </div>
+      )}
+
       <div className="mb-6">
         <label className="text-xs font-bold text-slate-500 uppercase tracking-widest">Select Category</label>
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
+
         {/* LEFT */}
         <div className="lg:col-span-2 space-y-6">
 

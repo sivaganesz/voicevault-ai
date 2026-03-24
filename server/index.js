@@ -12,12 +12,20 @@ import { QdrantClient } from '@qdrant/js-client-rest';
 import crypto from 'crypto';
 import dotenv from 'dotenv';
 import { GoogleGenerativeAI } from '@google/generative-ai';
+import { v2 as cloudinary } from 'cloudinary';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 // Load .env from the server directory
 dotenv.config({ path: path.join(__dirname, '.env') });
+
+// Configure Cloudinary
+cloudinary.config({
+  cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
+  api_key: process.env.CLOUDINARY_API_KEY,
+  api_secret: process.env.CLOUDINARY_API_SECRET,
+});
 
 const require = createRequire(import.meta.url);
 const pdfLib = require('pdf-parse');
@@ -114,6 +122,28 @@ const upload = multer({
   },
 });
 
+const uploadJobs = new Map();
+
+// Progress Tracking Endpoint (Polling)
+app.get('/api/upload-status/:jobId', (req, res) => {
+  const { jobId } = req.params;
+  
+  if (uploadJobs.has(jobId)) {
+    const job = uploadJobs.get(jobId);
+    res.json(job);
+    
+    // If completed or error, the client will stop polling, 
+    // so we can schedule a cleanup of the job data
+    if (job.progress === 100 || job.status === 'error') {
+      setTimeout(() => {
+        uploadJobs.delete(jobId);
+      }, 10000); // Keep for 10 seconds to allow for late pollers
+    }
+  } else {
+    res.status(404).json({ error: 'Job not found' });
+  }
+});
+
 const server = http.createServer(app);
 const wss = new WebSocketServer({ server });
 
@@ -151,79 +181,184 @@ async function parseFile(filePath, mimeType, extension) {
 
 // File Upload Endpoint
 app.post('/api/upload', upload.single('file'), async (req, res) => {
+  let filePath = null;
+  const jobId = req.body.jobId;
+
+  const updateProgress = (status, progress) => {
+    if (jobId) {
+      uploadJobs.set(jobId, { status, progress, filename: req.file?.originalname });
+    }
+  };
+
   try {
     if (!req.file) {
       return res.status(400).json({ error: 'No file uploaded' });
     }
 
-    const filePath = req.file.path;
+    filePath = req.file.path;
     const extension = path.extname(req.file.originalname);
     const category = req.body.category || 'general';
 
-    console.log(`📄 Processing file: ${req.file.originalname} (${req.file.mimetype}) in category: ${category}`);
+    updateProgress('Uploading to Cloudinary', 10);
+    console.log(`☁️ Uploading to Cloudinary: ${req.file.originalname}`);
+    
+    // 1. Upload to Cloudinary
+    let cloudinaryResult;
+    try {
+      cloudinaryResult = await cloudinary.uploader.upload(filePath, {
+        resource_type: 'auto',
+        folder: 'voice-vault-documents',
+        public_id: `${Date.now()}-${req.file.originalname.replace(/\.[^/.]+$/, "")}`
+      });
+      console.log(`✅ Cloudinary Upload Success: ${cloudinaryResult.secure_url}`);
+    } catch (err) {
+      console.error('❌ Cloudinary Upload Failed:', err);
+      updateProgress('Cloudinary error', 0);
+      throw new Error(`Cloudinary error: ${err.message}`);
+    }
 
-    const parsedText = await parseFile(filePath, req.file.mimetype, extension);
-    console.log(`✅ File parsed successfully. Length: ${parsedText.length} characters.`);
+    updateProgress('Parsing file content', 30);
+    // 2. Parse local file
+    console.log(`📄 Processing file content: ${req.file.originalname} (${req.file.mimetype}) in category: ${category}`);
+    let parsedText;
+    try {
+      parsedText = await parseFile(filePath, req.file.mimetype, extension);
+      console.log(`✅ File parsed successfully. Length: ${parsedText.length} characters.`);
+    } catch (err) {
+      console.error('❌ Parsing Failed:', err);
+      updateProgress('Parsing error', 0);
+      throw new Error(`Parsing error: ${err.message}`);
+    }
 
+    if (!parsedText || parsedText.trim().length === 0) {
+      updateProgress('Empty content error', 0);
+      throw new Error('File content is empty or could not be extracted');
+    }
+
+    updateProgress('Generating embeddings', 60);
+    // 3. Chunking
     const chunks = parsedText.split(/\n\s*\n/).filter(c => c.trim().length > 50);
     const finalChunks = chunks.length > 0 ? chunks : [parsedText.substring(0, 2000)];
 
     console.log(`🧩 Splitting into ${finalChunks.length} chunks for embedding...`);
 
+    // 4. Embedding & Qdrant
     const points = [];
     for (let i = 0; i < finalChunks.length; i++) {
       const chunk = finalChunks[i];
-      const embedding = await createEmbedding(chunk);
-      
-      points.push({
-        id: crypto.randomUUID(),
-        vector: embedding,
-        payload: {
-          text: chunk,
-          filename: req.file.originalname,
-          category: category,
-          timestamp: new Date().toISOString()
-        }
-      });
+      try {
+        const embedding = await createEmbedding(chunk);
+        
+        points.push({
+          id: crypto.randomUUID(),
+          vector: embedding,
+          payload: {
+            text: chunk,
+            filename: req.file.originalname,
+            category: category,
+            timestamp: new Date().toISOString(),
+            cloudinary_url: cloudinaryResult.secure_url,
+            cloudinary_id: cloudinaryResult.public_id
+          }
+        });
+      } catch (err) {
+        console.error(`❌ Embedding failed for chunk ${i}:`, err);
+        updateProgress('Embedding error', 0);
+        throw new Error(`AI Embedding error: ${err.message}`);
+      }
     }
 
-    await qdrantClient.upsert(COLLECTION_NAME, {
-      wait: true,
-      points: points
-    });
+    updateProgress('Storing in Vector Database', 90);
+    try {
+      await qdrantClient.upsert(COLLECTION_NAME, {
+        wait: true,
+        points: points
+      });
+      console.log(`✨ Successfully stored ${points.length} vectors in Qdrant`);
+    } catch (err) {
+      console.error('❌ Qdrant Upsert Failed:', err);
+      updateProgress('Database error', 0);
+      throw new Error(`Qdrant database error: ${err.message}`);
+    }
 
-    console.log(`✨ Successfully stored ${points.length} vectors in Qdrant`);
+    // 5. Clean up local file
+    if (fs.existsSync(filePath)) {
+      fs.unlinkSync(filePath);
+      console.log(`🗑️ Local file deleted: ${filePath}`);
+    }
+
+    updateProgress('Completed', 100);
 
     res.json({
       success: true,
-      message: 'File uploaded, parsed, and indexed in Qdrant',
+      message: 'File uploaded to Cloudinary and indexed in Qdrant',
       filename: req.file.originalname,
       category: category,
-      chunksCount: finalChunks.length
+      chunksCount: finalChunks.length,
+      url: cloudinaryResult.secure_url
     });
   } catch (error) {
-    console.error('❌ Upload/Indexing error:', error);
-    res.status(500).json({ error: error.message || 'Failed to process file' });
+    console.error('❌ ERROR IN UPLOAD WORKFLOW:', error.message);
+    if (jobId) uploadJobs.set(jobId, { status: 'error', progress: 0, error: error.message });
+    
+    // Clean up local file on failure
+    if (filePath && fs.existsSync(filePath)) {
+      try {
+        fs.unlinkSync(filePath);
+        console.log(`🗑️ Cleaned up temporary file: ${filePath}`);
+      } catch (unlinkErr) {
+        console.error('⚠️ Could not delete temporary file:', unlinkErr.message);
+      }
+    }
+    
+    res.status(500).json({ 
+      error: error.message || 'An unexpected error occurred during processing',
+      step: error.message.split(':')[0] // Simple hint about where it failed
+    });
   }
 });
 
 // Documents Endpoint
-app.get('/api/documents', (req, res) => {
+app.get('/api/documents', async (req, res) => {
   try {
-    const documents = fs.readdirSync('uploads').map(file => {
-      const filePath = path.join('uploads', file);
-      const stats = fs.statSync(filePath);
+    console.log('📂 Fetching documents from Cloudinary (Merging raw and image types)...');
+    
+    // Fetch raw files (TXT, DOCX, etc.)
+    const rawResources = await cloudinary.api.resources({
+      type: 'upload',
+      prefix: 'voice-vault-documents/',
+      resource_type: 'raw',
+      max_results: 50
+    });
+
+    // Fetch image files (Cloudinary often treats PDFs as images)
+    const imageResources = await cloudinary.api.resources({
+      type: 'upload',
+      prefix: 'voice-vault-documents/',
+      resource_type: 'image',
+      max_results: 50
+    });
+
+    const combinedResources = [...rawResources.resources, ...imageResources.resources];
+
+    const documents = combinedResources.map(file => {
+      const name = file.public_id.replace('voice-vault-documents/', '');
       return {
-        name: file,
-        size: stats.size,
-        date: stats.mtime,
-        type: path.extname(file).toLowerCase(),
+        name: name,
+        size: file.bytes,
+        date: file.created_at,
+        type: path.extname(name) || (file.format ? `.${file.format}` : '.unknown'),
+        url: file.secure_url
       };
     });
+
+    // Sort by date descending
+    documents.sort((a, b) => new Date(b.date) - new Date(a.date));
+
     res.json(documents);
   } catch (error) {
-    console.error('Error fetching documents:', error);
-    res.status(500).json({ error: 'Failed to fetch documents' });
+    console.error('Error fetching documents from Cloudinary:', error);
+    res.status(500).json({ error: 'Failed to fetch documents from Cloudinary' });
   }
 });
 
@@ -465,6 +600,15 @@ wss.on('connection', async (clientWs) => {
   clientWs.on('close', () => {
     if (geminiSession) geminiSession.close();
     isSessionActive = false;
+  });
+});
+
+// Error Handling Middleware (must be after all routes)
+app.use((err, req, res, next) => {
+  console.error('Final Error Catch:', err.message);
+  res.status(err.status || 500).json({
+    error: err.message || 'Internal Server Error',
+    type: err.name || 'Error'
   });
 });
 
