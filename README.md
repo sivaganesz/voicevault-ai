@@ -232,6 +232,7 @@ cp .env.example .env
 Edit `.env` and add your Gemini API key:
 ```env
 GEMINI_API_KEY=your_gemini_api_key_here
+MONGODB_URI=your-mongodb-uri
 ```
 
 5. **Create uploads directory**
@@ -386,68 +387,6 @@ Settings are stored in `server/config/settings.json` and persist between restart
 
 ---
 
-## 🧩 API Endpoints
-
-### Voice Processing
-
-**POST** `/api/voice/process`
-- Upload audio file
-- Returns transcript and AI response
-```json
-{
-  "success": true,
-  "transcript": "What are the key features?",
-  "response": "The key features include...",
-  "timestamp": "2024-03-22T10:30:00Z"
-}
-```
-
-**GET** `/api/voice/session`
-- Get current voice session info
-
-### Settings
-
-**GET** `/api/settings`
-- Retrieve current configuration
-
-**POST** `/api/settings`
-- Save new configuration
-```json
-{
-  "qdrant": {
-    "apiKey": "xxx",
-    "endpoint": "https://...",
-    "collectionName": "docs"
-  }
-}
-```
-
-**POST** `/api/settings/test/:service`
-- Test connection to a specific service
-
-### Documents
-
-**POST** `/api/documents/upload`
-- Upload document file
-- Returns document ID and URL
-
-**POST** `/api/documents/process/:documentId`
-- Process uploaded document
-- Extract text, generate embeddings, store in Qdrant
-
-**GET** `/api/documents`
-- List all uploaded documents
-
-**POST** `/api/documents/scrape`
-- Scrape website using Firecrawl
-```json
-{
-  "url": "https://example.com"
-}
-```
-
----
-
 ## ⚠️ Challenges & Solutions
 
 ### Challenge 1: PDF Parsing Issues
@@ -484,37 +423,7 @@ Settings are stored in `server/config/settings.json` and persist between restart
 - [ ] Advanced RAG techniques (HyDE, query expansion)
 - [ ] Voice personalization (user profiles)
 
-### Long Term
-- [ ] Mobile apps (iOS, Android)
-- [ ] Offline mode with local embeddings
-- [ ] Integration with Google Drive, Dropbox, Notion
-- [ ] Real-time collaboration features
-- [ ] Advanced analytics dashboard
-- [ ] Custom LLM fine-tuning
-
 ---
-
-## 🧪 Testing
-
-### Manual Testing Checklist
-
-**Voice Interface:**
-- [ ] Record audio successfully
-- [ ] See waveform animation
-- [ ] Receive transcript
-- [ ] Get AI response
-- [ ] View conversation history
-
-**Settings:**
-- [ ] Switch between tabs
-- [ ] Enter API keys
-- [ ] Save configuration
-- [ ] See success feedback
-
-**Documents:**
-- [ ] Upload PDF file
-- [ ] Process document
-- [ ] Search within documents
 
 ### API Testing
 
@@ -531,26 +440,6 @@ curl http://localhost:3000/api/settings
 curl -X POST -F "file=@document.pdf" http://localhost:3000/api/documents/upload
 ```
 
----
-
-## 🤝 Contributing
-
-We welcome contributions! Please follow these guidelines:
-
-1. Fork the repository
-2. Create a feature branch (`git checkout -b feature/amazing-feature`)
-3. Commit your changes (`git commit -m 'Add amazing feature'`)
-4. Push to the branch (`git push origin feature/amazing-feature`)
-5. Open a Pull Request
-
----
-
-## 📄 License
-
-This project is licensed under the MIT License - see the LICENSE file for details.
-
----
-
 ## 🙏 Acknowledgments
 
 - **Google Gemini** for powerful language understanding
@@ -558,22 +447,3 @@ This project is licensed under the MIT License - see the LICENSE file for detail
 - **Firecrawl** for reliable web scraping
 - **Cloudinary** for seamless file storage
 - **LiveKit** for real-time voice infrastructure
-
----
-
-## 📞 Support
-
-For issues, questions, or suggestions:
-- Open an issue on GitHub
-- Email: support@voicevault.ai
-- Documentation: [Project Wiki](https://github.com/yourusername/voicevault-ai/wiki)
-
----
-
-## 🌟 Star History
-
-If you find this project useful, please consider giving it a star ⭐
-
----
-
-**Built with ❤️ for the future of voice-first AI**
