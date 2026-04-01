@@ -1,10 +1,12 @@
 // AudioWorkletProcessor for capturing raw PCM audio
-// This runs on a separate audio thread for non-blocking processing
+// Runs on a separate audio thread for non-blocking processing
 
 class AudioCaptureProcessor extends AudioWorkletProcessor {
   constructor() {
     super();
-    this.bufferSize = 2048; // ~128ms at 16kHz
+    // Optimization: reduced from 2048 (~128ms) to 1024 (~64ms) at 16kHz.
+    // Smaller buffer = audio reaches Gemini faster = lower perceived latency.
+    this.bufferSize = 1024;
     this.buffer = new Float32Array(this.bufferSize);
     this.bufferIndex = 0;
   }
@@ -26,11 +28,11 @@ class AudioCaptureProcessor extends AudioWorkletProcessor {
           pcmData[j] = s < 0 ? s * 0x8000 : s * 0x7FFF;
         }
 
-        // Post the PCM buffer to the main thread
-        this.port.postMessage({
-          type: 'audio',
-          pcmData: pcmData.buffer,
-        }, [pcmData.buffer]);
+        // Post the PCM buffer to the main thread (transferable for zero-copy)
+        this.port.postMessage(
+          { type: 'audio', pcmData: pcmData.buffer },
+          [pcmData.buffer]
+        );
 
         this.buffer = new Float32Array(this.bufferSize);
         this.bufferIndex = 0;
