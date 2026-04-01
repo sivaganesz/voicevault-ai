@@ -38,7 +38,7 @@ VoiceVault AI centralizes knowledge, enables voice interaction, and provides ins
 
 - **Semantic search** via Qdrant vector database
 - **Natural language understanding** via Gemini AI
-- **Voice input/output** via LiveKit and Web Audio API
+- **Voice input/output** via Websocket and Web Audio API
 - **Automated data collection** via Firecrawl
 
 ---
@@ -70,7 +70,7 @@ VoiceVault AI centralizes knowledge, enables voice interaction, and provides ins
 - **Qdrant** - Vector database for embeddings
 - **Firecrawl** - Web scraping and data collection
 - **Cloudinary** - Cloud file storage
-- **LiveKit** - Real-time voice communication (optional)
+- **Websocket** - Real-time voice communication (optional)
 - **pdf-parse** - PDF text extraction
 
 ---
@@ -112,19 +112,19 @@ VoiceVault AI centralizes knowledge, enables voice interaction, and provides ins
 └────────────────────────┬────────────────────────────────────┘
                          │
                          ▼
-┌─────────────────────────────────────────────────────────────┐
-│                  EXTERNAL SERVICES                           │
+┌────────────────────────────────────────────────────────────┐
+│                  EXTERNAL SERVICES                         │
 │  ┌────────────┐  ┌────────────┐  ┌────────────┐            │
 │  │  Qdrant    │  │ Firecrawl  │  │ Cloudinary │            │
 │  │  (Vector   │  │ (Web       │  │ (File      │            │
 │  │   DB)      │  │  Scraping) │  │  Storage)  │            │
 │  └────────────┘  └────────────┘  └────────────┘            │
-│                                                              │
+│                                                            │
 │  ┌────────────┐  ┌────────────┐                            │
-│  │  Gemini AI │  │  LiveKit   │                            │
+│  │  Gemini AI │  │  Websocket │                            │
 │  │  (LLM)     │  │  (Voice)   │                            │
 │  └────────────┘  └────────────┘                            │
-└─────────────────────────────────────────────────────────────┘
+└────────────────────────────────────────────────────────────┘
 ```
 
 ---
@@ -446,4 +446,4 @@ curl -X POST -F "file=@document.pdf" http://localhost:3000/api/documents/upload
 - **Qdrant** for high-performance vector search
 - **Firecrawl** for reliable web scraping
 - **Cloudinary** for seamless file storage
-- **LiveKit** for real-time voice infrastructure
+- **Websocket** for real-time voice infrastructure
