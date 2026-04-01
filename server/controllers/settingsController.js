@@ -5,11 +5,11 @@ import { QdrantClient } from '@qdrant/js-client-rest';
 import { GoogleGenAI } from '@google/genai';
 import { GoogleGenerativeAI } from '@google/generative-ai';
 import * as state from '../config/state.js';
-
+ 
 export async function applyConfig(config) {
   state.setGlobalSettings(config);
   state.setCollectionName(config.qdrant.collection || 'documents');
-
+ 
   if (config.cloudinary.cloudName && config.cloudinary.apiKey && config.cloudinary.apiSecret) {
     cloudinary.config({
       cloud_name: config.cloudinary.cloudName,
@@ -18,14 +18,19 @@ export async function applyConfig(config) {
     });
     console.log('✅ Cloudinary configured');
   }
-
+ 
   if (config.qdrant.endpoint) {
+    // ── Optimization: explicit timeout on the Qdrant REST client ─────────────
+    // The default is no timeout — a transient network hiccup would stall the
+    // request indefinitely. 8 s is generous enough for cold starts yet tight
+    // enough to surface issues quickly.
     const client = new QdrantClient({
       url: config.qdrant.endpoint,
-      apiKey: config.qdrant.apiKey || undefined
+      apiKey: config.qdrant.apiKey || undefined,
+      timeout: 8000, // ms
     });
     state.setQdrantClient(client);
-
+ 
     try {
       const collections = await client.getCollections();
       const exists = collections.collections.some(c => c.name === state.COLLECTION_NAME);
@@ -41,20 +46,20 @@ export async function applyConfig(config) {
       console.error('❌ Error initializing Qdrant:', err.message);
     }
   }
-
+ 
   if (config.gemini.apiKey) {
-    const aiInstance = new GoogleGenAI({ 
+    const aiInstance = new GoogleGenAI({
       apiKey: config.gemini.apiKey,
       httpOptions: { apiVersion: 'v1alpha' }
     });
     state.setAi(aiInstance);
-    
+ 
     const genAI = new GoogleGenerativeAI(config.gemini.apiKey);
-    state.setEmbeddingModel(genAI.getGenerativeModel({ model: "gemini-embedding-001" }));
+    state.setEmbeddingModel(genAI.getGenerativeModel({ model: 'gemini-embedding-001' }));
     console.log('✅ Gemini AI configured');
   }
 }
-
+ 
 export async function loadAndApplySettings() {
   try {
     const mongodbUri = process.env.MONGODB_URI;
@@ -63,10 +68,10 @@ export async function loadAndApplySettings() {
       return;
     }
     if (mongoose.connection.readyState === 0) {
-        await mongoose.connect(mongodbUri);
-        console.log('✅ Connected to MongoDB');
+      await mongoose.connect(mongodbUri);
+      console.log('✅ Connected to MongoDB');
     }
-
+ 
     let config = await Settings.findOne();
     if (!config) {
       config = await Settings.create({
@@ -94,7 +99,7 @@ export async function loadAndApplySettings() {
     console.error('❌ Failed to load settings:', err);
   }
 }
-
+ 
 export const getSettings = async (req, res) => {
   try {
     const config = await Settings.findOne();
@@ -103,7 +108,7 @@ export const getSettings = async (req, res) => {
     res.status(500).json({ error: 'Failed to fetch settings' });
   }
 };
-
+ 
 export const updateSettings = async (req, res) => {
   try {
     let config = await Settings.findOne();
@@ -120,3 +125,4 @@ export const updateSettings = async (req, res) => {
     res.status(500).json({ error: 'Failed to save settings' });
   }
 };
+ 
